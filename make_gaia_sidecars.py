@@ -50,6 +50,13 @@ def parse_args():
         help="G-band magnitude limit for Gaia stars in sidecars (default: 17.0).",
     )
     parser.add_argument(
+        "--search_radius_multiplier",
+        type=float,
+        default=1.0,
+        help="Multiplier for search radius (default: 1.0 = cutout half-diagonal). "
+             "Use >1 to search larger area around cutout for context stars.",
+    )
+    parser.add_argument(
         "--overwrite",
         action="store_true",
         help="Overwrite existing _gaia.csv sidecars.",
@@ -117,23 +124,31 @@ def gaia_stars_for_cutout(
     gaia_coord,
     pixscale,
     maglim,
+    search_radius_multiplier=1.0,
 ):
     """Return an Astropy Table of Gaia stars inside a square cutout.
 
     Columns included:
       ra_deg, dec_deg, Gmag, sep_arcsec, sep_pix, x_pix, y_pix, (optional) source_id
+
+    Parameters:
+    -----------
+    search_radius_multiplier : float
+        Multiplier for search radius (1.0 = cutout half-diagonal).
+        Use >1 to search larger area for context stars.
     """
     # Center coordinate
     center = SkyCoord(ra_center * u.deg, dec_center * u.deg)
 
     # Half diagonal of the square cutout in arcsec
     half_diag_arcsec = 0.5 * np.sqrt(2.0) * size_arcsec
+    search_radius_arcsec = half_diag_arcsec * search_radius_multiplier
 
     # Compute separation from center to all Gaia stars
     sep2d = center.separation(gaia_coord)
 
     # Find stars within the search radius
-    idx_gaia = np.where(sep2d < half_diag_arcsec * u.arcsec)[0]
+    idx_gaia = np.where(sep2d < search_radius_arcsec * u.arcsec)[0]
 
     if len(idx_gaia) == 0:
         return None
@@ -254,6 +269,7 @@ def main():
             gaia_coord=gaia_coord,
             pixscale=pixscale,
             maglim=args.gaia_maglim,
+            search_radius_multiplier=args.search_radius_multiplier,
         )
 
         if gaia_tbl is None or len(gaia_tbl) == 0:
