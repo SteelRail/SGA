@@ -21,7 +21,11 @@ Download JPEG cutouts from DESI Legacy Survey DR9 for SGA-2020 galaxies.
 ## Installation
 
 ```bash
-source ~/Work/venvs/.venv/bin/activate
+# Create and activate virtual environment
+python3 -m venv env
+source env/bin/activate  # or: env\Scripts\activate (Windows)
+
+# Install dependencies
 pip install astropy requests numpy tqdm
 ```
 
@@ -33,7 +37,7 @@ Download JPEG images of galaxy centers with adaptive sizing based on galaxy diam
 
 ```bash
 python load_sga.py \
-  --catalog /Users/vasilybelokurov/data/catalogues/SGA-2020.fits \
+  --catalog /path/to/SGA-2020.fits \
   --mode galaxy \
   --download_folder ./galaxy_cutouts \
   --num_workers 8 \
@@ -53,7 +57,7 @@ Download background field cutouts around each galaxy. Field positions are unifor
 
 ```bash
 python load_sga.py \
-  --catalog /Users/vasilybelokurov/data/catalogues/SGA-2020.fits \
+  --catalog /path/to/SGA-2020.fits \
   --mode fields \
   --n_away 7 \
   --na_away 20 \
