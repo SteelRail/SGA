@@ -129,10 +129,11 @@ def gaia_stars_for_cutout(
     # Half diagonal of the square cutout in arcsec
     half_diag_arcsec = 0.5 * np.sqrt(2.0) * size_arcsec
 
-    # Search around center for Gaia stars within the half-diagonal
-    idx_center, idx_gaia, sep2d, _ = center.search_around_sky(
-        gaia_coord, half_diag_arcsec * u.arcsec
-    )
+    # Compute separation from center to all Gaia stars
+    sep2d = center.separation(gaia_coord)
+
+    # Find stars within the search radius
+    idx_gaia = np.where(sep2d < half_diag_arcsec * u.arcsec)[0]
 
     if len(idx_gaia) == 0:
         return None
@@ -144,7 +145,7 @@ def gaia_stars_for_cutout(
         return None
 
     idx_gaia = idx_gaia[m]
-    sep2d = sep2d[m]
+    sep2d = sep2d[idx_gaia]
     mag = mag[m]
 
     # Small-angle conversion to pixel coordinates
