@@ -115,8 +115,8 @@ def main():
                         help='Dec maximum in degrees (for regional testing)')
     parser.add_argument('--output-csv', type=str, default=None,
                         help='Save results to CSV file')
-    parser.add_argument('--output-fits', type=str, default=None,
-                        help='Save results to FITS file')
+    parser.add_argument('--output-fits', type=str, default='./data/catalogues/gaia_bright_stars_g15_b5.fits',
+                        help='Save results to FITS file (default: ./data/catalogues/gaia_bright_stars_g15_b5.fits)\n(g15=g<15.0 mag, b5=|b|>=5.0 deg)')
 
     args = parser.parse_args()
 

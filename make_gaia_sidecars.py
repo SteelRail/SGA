@@ -23,8 +23,8 @@ def parse_args():
     parser.add_argument(
         "--gaia_catalog",
         type=str,
-        required=True,
-        help="Path to Gaia bright-star catalog (FITS with ra, dec, phot_g_mean_mag).",
+        default="./data/catalogues/gaia_bright_stars_g15_b5.fits",
+        help="Path to Gaia bright-star catalog (FITS with ra, dec, phot_g_mean_mag). Default: ./data/catalogues/gaia_bright_stars_g15_b5.fits (g15=g<15.0 mag, b5=|b|>=5.0 deg)",
     )
     parser.add_argument(
         "--pixscale",

@@ -28,10 +28,10 @@ parser.add_argument('--mode', type=str, default='galaxy', choices=['galaxy', 'fi
                     help='Download mode: galaxy (central), fields (background), or retry (redownload missing/broken cutouts)')
 parser.add_argument('--n_away', type=int, default=7, help='Number of field positions per galaxy (mode=fields)')
 parser.add_argument('--na_away', type=float, default=20.0, help='Offset multiplier for field radius (na_away * D26/2)')
-parser.add_argument('--bricks_file', type=str, default=None,
-                    help='Path to survey-bricks-dr9-south.fits[.gz] for footprint checking (optional)')
-parser.add_argument('--bricks_file_north', type=str, default=None,
-                    help='Path to survey-bricks-dr9-north.fits[.gz] for northern footprint (optional)')
+parser.add_argument('--bricks_file', type=str, default='./data/catalogues/survey-bricks-dr9-south.fits',
+                    help='Path to survey-bricks-dr9-south.fits[.gz] for footprint checking (default: ./data/catalogues/survey-bricks-dr9-south.fits)')
+parser.add_argument('--bricks_file_north', type=str, default='./data/catalogues/survey-bricks-dr9-north.fits',
+                    help='Path to survey-bricks-dr9-north.fits[.gz] for northern footprint (default: ./data/catalogues/survey-bricks-dr9-north.fits)')
 parser.add_argument('--min_brick_exposures', type=int, default=1,
                     help='Minimum total exposures (g+r+z) in brick to consider it covered')
 parser.add_argument('--broken_size_threshold', type=int, default=500,
