@@ -61,26 +61,7 @@ def create_bright_stars_query(mag_limit=15.0, ra_min=None, ra_max=None,
         source_id,
         ra,
         dec,
-        parallax,
-        parallax_error,
-        pmra,
-        pmdec,
-        pmra_error,
-        pmdec_error,
-        phot_g_mean_mag,
-        phot_bp_mean_mag,
-        phot_rp_mean_mag,
-        phot_g_mean_flux,
-        phot_bp_mean_flux,
-        phot_rp_mean_flux,
-        bp_rp,
-        teff_gspphot,
-        logg_gspphot,
-        mh_gspphot,
-        radial_velocity,
-        radial_velocity_error,
-        ruwe,
-        ipd_frac_multi_peak
+        phot_g_mean_mag
     FROM gaia_dr3.gaia_source
     WHERE {where_clause}
     ORDER BY phot_g_mean_mag
@@ -271,17 +252,10 @@ def main():
     print("=" * 70)
     print(f"Total stars: {len(df)}")
     print(f"\nBrightest stars (by g magnitude):")
-    print(df[['source_id', 'ra', 'dec', 'phot_g_mean_mag', 'phot_bp_mean_mag', 'phot_rp_mean_mag']].head(10).to_string(index=False))
+    print(df[['source_id', 'ra', 'dec', 'phot_g_mean_mag']].head(10).to_string(index=False))
 
-    print(f"\nPhotometric ranges:")
-    print(f"  G:  {df['phot_g_mean_mag'].min():.2f} - {df['phot_g_mean_mag'].max():.2f} mag")
-    print(f"  BP: {df['phot_bp_mean_mag'].min():.2f} - {df['phot_bp_mean_mag'].max():.2f} mag")
-    print(f"  RP: {df['phot_rp_mean_mag'].min():.2f} - {df['phot_rp_mean_mag'].max():.2f} mag")
-
-    print(f"\nAstrometric ranges:")
-    print(f"  Parallax:     {df['parallax'].min():.2f} - {df['parallax'].max():.2f} mas")
-    print(f"  Proper motion RA:  {df['pmra'].min():.2f} - {df['pmra'].max():.2f} mas/yr")
-    print(f"  Proper motion Dec: {df['pmdec'].min():.2f} - {df['pmdec'].max():.2f} mas/yr")
+    print(f"\nPhotometric range:")
+    print(f"  G mag: {df['phot_g_mean_mag'].min():.2f} - {df['phot_g_mean_mag'].max():.2f} mag")
 
     # Save to CSV if requested
     if args.output_csv:
