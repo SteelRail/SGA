@@ -189,9 +189,9 @@ if __name__ == "__main__":
                         default="all", help="run one stage only")
     parser.add_argument("--workers", type=int, default=12,
                         help="parallel download connections")
-    parser.add_argument("--jobs", type=int, default=32,
-                        help="cut-stage worker processes (measured near-linear "
-                             "to 64; cold NFS reads are the real ceiling)")
+    parser.add_argument("--jobs", type=int, default=96,
+                        help="cut-stage worker processes (measured peak on this "
+                             "host; throughput degrades beyond ~96)")
     parser.add_argument("--overwrite", action="store_true",
                         help="ignore the manifest and re-cut this run's targets")
     main(parser.parse_args())
