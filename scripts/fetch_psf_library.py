@@ -41,7 +41,7 @@ from src import fetch, urls
 from src.bricks import Bricks
 from src.catalog import Catalog
 from src.cutout import BANDS, PIXSCALE
-from src.select import galaxy_targets
+from src.select import galaxy_targets, subsample
 
 
 def moffat(params, xs, ys):
@@ -98,10 +98,7 @@ def pick_groups(args):
         {(t["group_name"], t["group_ra"]) for t in targets},
         key=lambda g: g[1],
     )
-    if args.n_groups < len(groups):
-        picks = np.linspace(0, len(groups) - 1, args.n_groups).round().astype(int)
-        groups = [groups[i] for i in np.unique(picks)]
-    return groups
+    return subsample(groups, args.n_groups)
 
 
 def main(args):

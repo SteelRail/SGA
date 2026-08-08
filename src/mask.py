@@ -24,9 +24,9 @@ plane, so any criterion can be revised without recomputing the others:
 Source footprints: extended types (REX/EXP/DEV/SER) are masked to
 `radius_factor` times the half-light radius SHAPE_R along the fitted
 ellipse; point types (PSF/DUP) to `psf_factor` times the frame's r-band
-PSF FWHM. Tractor ellipticity components follow the tractor convention
-e1 = e cos(2b), e2 = e sin(2b) with b measured from East towards North,
-so the position angle North-towards-East is 90 deg - b.
+PSF FWHM. Tractor ellipticity components are e1 = e cos(2b),
+e2 = e sin(2b) with b the position angle North towards East, verified
+against the SGA catalogue PAs of the tractor L3 rows.
 
 MASKBITS bit numbers follow legacysurvey.org/dr9/bitmasks.
 """
@@ -69,8 +69,6 @@ LAYER_GALAXY = 8
 # The single structural threshold, shared by both drivers: a frame whose
 # all-band coverage falls below this is unusable and is not written.
 DEFAULT_COVERAGE_MIN = 0.8
-
-POINT_TYPES = (b"PSF", b"DUP", "PSF", "DUP")
 
 
 def invalid_layer(ivar):
@@ -115,10 +113,13 @@ def source_layer(shape, wcs, tractor, psf_fwhm_r,
                  radius_factor=2.0, psf_factor=1.25, min_radius=1.0):
     """Per-detection footprints of every tractor source except SGA galaxies."""
     layer = np.zeros(shape, dtype=bool)
-    keep = tractor["ref_cat"] != "L3"
-    rows = tractor[keep]
-    if not len(rows):
+    # plain-array copies: fancy-indexing the FITS record array per sample
+    # costs ~30 ms; these copies cost well under 1 ms
+    keep = np.asarray(tractor["ref_cat"]) != "L3"
+    if not keep.any():
         return layer
+    rows = {column: np.asarray(tractor[column])[keep] for column in
+            ("ra", "dec", "type", "shape_r", "shape_e1", "shape_e2")}
     x, y = wcs.world_to_pixel_values(rows["ra"], rows["dec"])
 
     types = np.char.strip(rows["type"].astype(str))
@@ -132,7 +133,7 @@ def source_layer(shape, wcs, tractor, psf_fwhm_r,
     e2 = np.array(rows["shape_e2"], dtype=float)
     e = np.hypot(e1, e2)
     ba = np.where(point | (e <= 0), 1.0, (1.0 - e) / (1.0 + e))
-    pa = 90.0 - 0.5 * np.degrees(np.arctan2(e2, e1))
+    pa = 0.5 * np.degrees(np.arctan2(e2, e1))
 
     height, width = shape
     margin = radius / PIXSCALE
@@ -155,9 +156,8 @@ def galaxy_layer(shape, wcs, catalog, ra0, dec0, margin=1.0):
         return layer
     jacobian = _sky_jacobian(wcs, (width - 1) / 2.0, (height - 1) / 2.0)
     for index in indices:
-        row = catalog.rows[int(index)]
         r26, ba, pa = catalog.ellipse(int(index))
-        x, y = wcs.world_to_pixel_values(row["RA"], row["DEC"])
+        x, y = wcs.world_to_pixel_values(catalog._ra[index], catalog._dec[index])
         _paint_ellipse(layer, float(x), float(y), margin * r26, ba, pa, jacobian)
     return layer
 

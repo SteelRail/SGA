@@ -2,14 +2,13 @@
 """Fetch the reference catalogues: SGA-2020 and the DR9 survey-bricks tables.
 
 A one-off prerequisite for every other script (~0.8 GB into
-data/catalogues/). Existing files are never re-fetched; an interrupted
-download resumes.
+data/catalogues/, where the Catalog and Bricks loaders expect them).
+Existing files are never re-fetched; an interrupted download resumes.
 
 Example:
     python scripts/fetch_catalogues.py
 """
 
-import argparse
 import sys
 from pathlib import Path
 
@@ -18,8 +17,8 @@ from src import fetch
 from src.urls import CATALOGUES
 
 
-def main(args):
-    dest = Path(args.dest)
+def main():
+    dest = Path("data/catalogues")
     tasks = [(url, dest / name) for name, url in CATALOGUES.items()]
     transferred, failures = fetch.fetch_many(tasks, workers=len(tasks),
                                              desc="catalogues")
@@ -31,9 +30,4 @@ def main(args):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(
-        description=__doc__.split("\n")[0],
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    parser.add_argument("--dest", default="data/catalogues",
-                        help="destination directory")
-    main(parser.parse_args())
+    main()

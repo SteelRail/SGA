@@ -26,6 +26,8 @@ import requests
 from astropy.io import fits
 from tqdm import tqdm
 
+from . import urls
+
 USER_AGENT = "SGA-training-data/1.0 (SteelRail/SGA; GRAF dataset build)"
 TIMEOUT = (15, 300)  # connect, read (seconds)
 CHUNK = 1 << 20
@@ -152,7 +154,7 @@ def fetch_many(tasks, workers=12, desc="fetching"):
     (url, exception). Concurrency is bounded by `workers` threads, each
     with its own keep-alive session.
     """
-    tasks = [t if len(t) == 3 else (*t, None) for t in tasks]
+    tasks = [task if len(task) == 3 else (*task, None) for task in tasks]
     transferred = 0
     failures = []
     with ThreadPoolExecutor(max_workers=workers) as pool:
@@ -167,4 +169,39 @@ def fetch_many(tasks, workers=12, desc="fetching"):
                 except Exception as error:
                     failures.append((futures[future], error))
                 progress.update()
+                progress.set_postfix_str(f"{transferred / 1e9:.2f} GB")
     return transferred, failures
+
+
+def brick_dir(root, brickname):
+    """Mirror directory of one brick's files under the data root."""
+    return Path(root) / "bricks" / brickname[:3] / brickname
+
+
+def mirror_bricks(bricks, root, workers=12, desc="bricks"):
+    """Mirror every coadd file of the given (brickname, hemisphere) pairs.
+
+    Bricks already fully mirrored are skipped without touching the
+    network; the rest are verified against the published sha256
+    manifests. Returns (bytes_transferred, bricknames_with_a_failed_file)
+    so callers decide their own failure policy.
+    """
+    pending = []
+    for brickname, hemisphere in bricks:
+        directory = brick_dir(root, brickname)
+        files = urls.brick_files(brickname, hemisphere)
+        if not all((directory / name).exists() for name in files):
+            pending.append((brickname, hemisphere, directory, files))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        manifests = list(pool.map(
+            lambda p: fetch_checksums(urls.brick_checksums(p[0], p[1])),
+            pending,
+        ))
+    tasks, owner = [], {}
+    for (brickname, _, directory, files), checksums in zip(pending, manifests,
+                                                           strict=True):
+        for name, url in files.items():
+            tasks.append((url, directory / name, checksums.get(name)))
+            owner[url] = brickname
+    transferred, failures = fetch_many(tasks, workers=workers, desc=desc)
+    return transferred, {owner[url] for url, _ in failures}

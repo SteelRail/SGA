@@ -22,8 +22,9 @@ def galaxy_targets(catalog, bricks, zcut=0.05, min_nexp=1,
     selected = catalog.select(zcut=zcut)
     rows = catalog.rows[selected]
     names, hemis, ok = bricks.resolve(rows["RA"], rows["DEC"], min_nexp=min_nexp)
-    side = np.maximum(np.round(size_mult * rows["D26"] * 60.0 / PIXSCALE)
-                      .astype(int), min_size)
+    side = np.maximum(
+        np.round(size_mult * rows["D26"].astype(float) * 60.0 / PIXSCALE)
+        .astype(int), min_size)
     ok &= catalog.clearance_ok(
         rows["RA"], rows["DEC"],
         extra_arcsec=0.5 * np.sqrt(2.0) * side * PIXSCALE,
@@ -37,6 +38,7 @@ def galaxy_targets(catalog, bricks, zcut=0.05, min_nexp=1,
             "ra": float(rows["RA"][i]),
             "dec": float(rows["DEC"][i]),
             "d26": float(rows["D26"][i]),
+            "size_px": int(side[i]),
             "group_name": str(rows["GROUP_NAME"][i]),
             "group_ra": float(rows["GROUP_RA"][i]),
             "brick": str(names[i]),

@@ -12,9 +12,11 @@ from the same L1 brick coadds. Per galaxy:
      scaled per direction by the ellipse geometry, plus the stamp
      half-diagonal. No blanket multiple of D26.
   2. --n-candidates positions are generated at randomised position
-     angles (seeded per galaxy, so re-runs are reproducible) at that
-     separation plus a small uniform slack — as close as safety allows,
-     which keeps most candidates inside the parent brick.
+     angles (seeded per galaxy, so re-runs are reproducible; changing
+     --seed, --n-candidates or --sb-limit invalidates existing samples —
+     clear the samples directory first) at that separation plus a small
+     uniform slack — as close as safety allows, which keeps most
+     candidates inside the parent brick.
   3. A candidate is rejected only structurally: outside the footprint,
      within the extent of *any* SGA-2020 galaxy (full catalogue,
      KD-tree, plus DR9's own GALAXY maskbit), or coverage below the
@@ -28,7 +30,9 @@ Bricks are opened through a funnel: candidates in bricks not yet
 mirrored are pre-screened on the 0.27 MB maskbits plane alone, and full
 imaging is fetched only for bricks that still host a surviving
 candidate. Stamp sizes follow the parent galaxy's rule (--size-mult x
-D26), so the two classes share a size distribution.
+D26), so the two classes share a size distribution. Cutting runs across
+--jobs worker processes; the manifest is the resume ledger (a row
+implies a whole, atomically-written file).
 
 The run reports the survival fraction overall and per brick, the
 rejection-reason histogram, and the fraction of accepted backgrounds
@@ -43,18 +47,19 @@ import argparse
 import csv
 import sys
 from collections import Counter, defaultdict
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
 import numpy as np
 from astropy.io import fits
 from astropy.wcs import WCS
+from tqdm import tqdm
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from src import fetch, urls
 from src.bricks import Bricks
 from src.catalog import Catalog
-from src.cutout import PIXSCALE, Coadd, brick_dir, cut, write_sample
+from src.cutout import PIXSCALE, Coadd, cut, write_sample
 from src.geometry import elliptical_radius, offset_position
 from src.mask import DEFAULT_COVERAGE_MIN, GALAXY_BIT, compute_layers
 from src.select import galaxy_targets, subsample
@@ -70,11 +75,17 @@ MANIFEST_FIELDS = [
     "galaxy_bit_frac", "status", "reason",
 ]
 
+# One catalogue per worker process, loaded on its first brick.
+_catalog = None
 
-def propose(catalog, bricks, target, args):
-    """Candidate positions for one galaxy, tested against catalogue and footprint."""
-    side = max(int(round(args.size_mult * target["d26"] * 60.0 / PIXSCALE)),
-               args.min_size)
+
+def propose(catalog, target, args):
+    """Seeded candidate positions for one galaxy — pure geometry, no tests.
+
+    Structural tests run vectorised over all candidates afterwards;
+    private underscore keys carry the float values they need.
+    """
+    side = target["size_px"]
     half_diag = 0.5 * np.sqrt(2.0) * side * PIXSCALE
 
     r_iso = catalog.isophotal_radius(target["index"], args.sb_limit)
@@ -92,30 +103,44 @@ def propose(catalog, bricks, target, args):
     seps = (r_iso / factors + half_diag) * (1.0 + slack)
     ras, decs = offset_position(target["ra"], target["dec"], seps, pas)
 
-    names, hemis, in_footprint = bricks.resolve(ras, decs,
-                                                min_nexp=args.min_nexp)
-    clear = catalog.clearance_ok(ras, decs, extra_arcsec=half_diag,
-                                 margin=args.sga_margin,
-                                 exclude=target["index"])
-    candidates = []
-    for k in range(args.n_candidates):
-        candidate = {
+    return [
+        {
             "parent_sga_id": target["sga_id"], "k": k,
             "ra": f"{ras[k]:.6f}", "dec": f"{decs[k]:.6f}",
             "pa_deg": f"{pas[k]:.2f}", "sep_arcsec": f"{seps[k]:.1f}",
-            "size_px": side, "brick": str(names[k]), "hemisphere": str(hemis[k]),
-            "in_parent_brick": int(str(names[k]) == target["brick"]),
-            "status": "candidate", "reason": "",
+            "size_px": side, "status": "candidate", "reason": "",
+            "_ra": float(ras[k]), "_dec": float(decs[k]),
+            "_half_diag": half_diag, "_index": target["index"],
+            "_parent_brick": target["brick"],
         }
-        if not in_footprint[k]:
+        for k in range(args.n_candidates)
+    ]
+
+
+def structural_tests(catalog, bricks, candidates, args):
+    """Footprint and full-atlas clearance for every candidate, vectorised."""
+    ras = np.array([c["_ra"] for c in candidates])
+    decs = np.array([c["_dec"] for c in candidates])
+    names, hemis, in_footprint = bricks.resolve(ras, decs,
+                                                min_nexp=args.min_nexp)
+    clear = catalog.clearance_ok(
+        ras, decs,
+        extra_arcsec=np.array([c["_half_diag"] for c in candidates]),
+        margin=args.sga_margin,
+        exclude=np.array([c["_index"] for c in candidates]),
+    )
+    for i, candidate in enumerate(candidates):
+        candidate["brick"] = str(names[i])
+        candidate["hemisphere"] = str(hemis[i])
+        candidate["in_parent_brick"] = \
+            int(candidate["brick"] == candidate["_parent_brick"])
+        if not in_footprint[i]:
             candidate.update(status="rejected", reason="footprint")
-        elif not clear[k]:
+        elif not clear[i]:
             candidate.update(status="rejected", reason="sga_overlap")
-        candidates.append(candidate)
-    return candidates
 
 
-def maskbits_prescreen(root, candidates, workers):
+def maskbits_prescreen(root, candidates, workers, coverage_min):
     """Screen candidates on the maskbits plane alone, fetching it where needed.
 
     Rejects candidates whose stamp box cannot reach the coverage
@@ -125,14 +150,15 @@ def maskbits_prescreen(root, candidates, workers):
     """
     alive = [c for c in candidates if c["status"] == "candidate"]
     bricks = sorted({(c["brick"], c["hemisphere"]) for c in alive})
-    tasks = []
+    tasks, owner = [], {}
     for brickname, hemisphere in bricks:
         name = f"legacysurvey-{brickname}-maskbits.fits.fz"
         url = urls.brick_files(brickname, hemisphere)[name]
-        tasks.append((url, brick_dir(root, brickname) / name))
+        tasks.append((url, fetch.brick_dir(root, brickname) / name))
+        owner[url] = brickname
     transferred, failures = fetch.fetch_many(tasks, workers=workers,
                                              desc="maskbits funnel")
-    failed = {url.rsplit("/", 2)[-2] for url, _ in failures}
+    failed = {owner[url] for url, _ in failures}
 
     by_brick = defaultdict(list)
     for candidate in alive:
@@ -142,99 +168,67 @@ def maskbits_prescreen(root, candidates, workers):
             for candidate in brick_candidates:
                 candidate.update(status="rejected", reason="fetch")
             continue
-        path = brick_dir(root, brickname) \
+        path = fetch.brick_dir(root, brickname) \
             / f"legacysurvey-{brickname}-maskbits.fits.fz"
         with fits.open(path) as hdul:
             hdu = hdul[1] if hdul[0].data is None else hdul[0]
             maskbits, wcs = hdu.data, WCS(hdu.header)
         for candidate in brick_candidates:
-            x, y = wcs.world_to_pixel_values(float(candidate["ra"]),
-                                             float(candidate["dec"]))
-            half = int(candidate["size_px"]) / 2.0
+            x, y = wcs.world_to_pixel_values(candidate["_ra"],
+                                             candidate["_dec"])
+            half = candidate["size_px"] / 2.0
             x_lo, x_hi = int(x - half), int(x + half)
             y_lo, y_hi = int(y - half), int(y + half)
             box = maskbits[max(y_lo, 0):max(y_hi, 0),
                            max(x_lo, 0):max(x_hi, 0)]
             on_grid = box.size / float(candidate["size_px"]) ** 2
-            if on_grid < DEFAULT_COVERAGE_MIN:
+            if on_grid < coverage_min:
                 candidate.update(status="rejected", reason="coverage")
             elif np.any(box & GALAXY_BIT):
                 candidate.update(status="rejected", reason="sga_maskbit")
     return transferred
 
 
-def fetch_imaging(root, candidates, workers):
-    """Full coadd files for every brick still hosting a live candidate."""
-    alive = [c for c in candidates if c["status"] == "candidate"]
-    bricks = sorted({(c["brick"], c["hemisphere"]) for c in alive})
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        manifests = list(pool.map(
-            lambda b: fetch.fetch_checksums(urls.brick_checksums(*b)), bricks
-        ))
-    tasks = []
-    for (brickname, hemisphere), checksums in zip(bricks, manifests, strict=True):
-        directory = brick_dir(root, brickname)
-        for name, url in urls.brick_files(brickname, hemisphere).items():
-            tasks.append((url, directory / name, checksums.get(name)))
-    transferred, failures = fetch.fetch_many(tasks, workers=workers,
-                                             desc=f"{len(bricks)} bricks")
-    failed = {url.rsplit("/", 2)[-2] for url, _ in failures}
-    for candidate in alive:
-        if candidate["brick"] in failed:
-            candidate.update(status="rejected", reason="fetch")
-    return transferred
-
-
-def cut_candidates(root, candidates, catalog, out_dir, manifest, args):
-    """Cut, mask and write every surviving candidate, brick by brick."""
-    by_brick = defaultdict(list)
-    for candidate in candidates:
-        if candidate["status"] == "candidate":
-            by_brick[candidate["brick"]].append(candidate)
-    written = 0
-    for n, (brickname, brick_candidates) in enumerate(sorted(by_brick.items()), 1):
-        brick = Coadd(brick_dir(root, brickname), brickname)
-        with fits.open(brick_dir(root, brickname)
-                       / f"tractor-{brickname}.fits") as hdul:
-            tractor = hdul[1].data
-        for candidate in brick_candidates:
-            path = out_dir \
-                / f"bg_{candidate['parent_sga_id']}_{candidate['k']}.fits"
-            record = {key: candidate[key] for key in MANIFEST_FIELDS
-                      if key in candidate}
-            record["file"] = path.name
-            if path.exists() and not args.overwrite:
-                candidate["status"] = "accepted"
-                continue
-            sample = cut(brick, float(candidate["ra"]),
-                         float(candidate["dec"]), int(candidate["size_px"]))
-            for band, fwhm in zip("grz", sample["psf_fwhm"], strict=True):
-                record[f"psf_{band}"] = f"{fwhm:.4f}"
-            record["valid_frac"] = f"{sample['valid_frac']:.4f}"
-            if sample["valid_frac"] < args.coverage_min:
-                candidate.update(status="rejected", reason="coverage")
-                record.update(status="rejected", reason="coverage")
-                manifest.writerow(record)
-                continue
-            layers, verdict = compute_layers(sample, catalog, tractor)
-            record.update({key: f"{value:.4f}"
-                           for key, value in verdict.items()})
-            record.update(status="written", reason="")
-            provenance = {
-                "PARENT": (candidate["parent_sga_id"],
-                           "SGA_ID of the parent galaxy"),
-                "OFFSET": (float(candidate["sep_arcsec"]),
-                           "separation from parent (arcsec)"),
-                "OFFPA": (float(candidate["pa_deg"]),
-                          "position angle of offset (deg, N->E)"),
-            }
-            write_sample(path, sample, brickname, provenance, layers=layers)
-            manifest.writerow(record)
-            candidate["status"] = "accepted"
-            written += 1
-        print(f"[{n}/{len(by_brick)}] {brickname}: "
-              f"{len(brick_candidates)} candidates, {written} written so far")
-    return written
+def cut_brick(task):
+    """Cut, mask and write one brick's candidates; returns manifest rows."""
+    global _catalog
+    if _catalog is None:
+        _catalog = Catalog()
+    root, out_dir, brickname, brick_candidates, coverage_min = task
+    brick = Coadd(fetch.brick_dir(root, brickname))
+    with fits.open(fetch.brick_dir(root, brickname)
+                   / f"tractor-{brickname}.fits") as hdul:
+        tractor = hdul[1].data
+    records = []
+    for candidate in brick_candidates:
+        path = Path(out_dir) \
+            / f"bg_{candidate['parent_sga_id']}_{candidate['k']}.fits"
+        record = {key: candidate[key] for key in MANIFEST_FIELDS
+                  if key in candidate}
+        record["file"] = path.name
+        sample = cut(brick, candidate["_ra"], candidate["_dec"],
+                     candidate["size_px"])
+        for band, fwhm in zip("grz", sample["psf_fwhm"], strict=True):
+            record[f"psf_{band}"] = f"{fwhm:.4f}"
+        record["valid_frac"] = f"{sample['valid_frac']:.4f}"
+        if sample["valid_frac"] < coverage_min:
+            record.update(status="rejected", reason="coverage")
+            records.append(record)
+            continue
+        layers, verdict = compute_layers(sample, _catalog, tractor)
+        record.update({key: f"{value:.4f}" for key, value in verdict.items()})
+        record.update(status="written", reason="")
+        provenance = {
+            "PARENT": (candidate["parent_sga_id"],
+                       "SGA_ID of the parent galaxy"),
+            "OFFSET": (float(candidate["sep_arcsec"]),
+                       "separation from parent (arcsec)"),
+            "OFFPA": (float(candidate["pa_deg"]),
+                      "position angle of offset (deg, N->E)"),
+        }
+        write_sample(path, sample, brickname, provenance, layers)
+        records.append(record)
+    return records
 
 
 def report(candidates, targets):
@@ -280,28 +274,73 @@ def main(args):
 
     candidates = []
     for target in targets:
-        candidates.extend(propose(catalog, bricks, target, args))
+        candidates.extend(propose(catalog, target, args))
+    structural_tests(catalog, bricks, candidates, args)
     alive = sum(c["status"] == "candidate" for c in candidates)
     print(f"{len(candidates)} candidates, {alive} past catalogue tests")
 
-    transferred = maskbits_prescreen(root, candidates, args.workers)
+    transferred = maskbits_prescreen(root, candidates, args.workers,
+                                     args.coverage_min)
     alive = sum(c["status"] == "candidate" for c in candidates)
     print(f"{alive} past the maskbits funnel "
           f"({transferred / 1e6:.0f} MB of maskbits)")
 
-    transferred += fetch_imaging(root, candidates, args.workers)
+    needed = sorted({(c["brick"], c["hemisphere"]) for c in candidates
+                     if c["status"] == "candidate"})
+    fetched, failed = fetch.mirror_bricks(needed, root, args.workers,
+                                          desc=f"{len(needed)} bricks")
+    transferred += fetched
+    for candidate in candidates:
+        if candidate["status"] == "candidate" and candidate["brick"] in failed:
+            candidate.update(status="rejected", reason="fetch")
     print(f"{transferred / 1e9:.2f} GB fetched")
 
     out_dir = root / "samples" / "backgrounds"
     out_dir.mkdir(exist_ok=True, parents=True)
     manifest_path = out_dir / "manifest.csv"
+    done = {}
+    if manifest_path.exists() and not args.overwrite:
+        with open(manifest_path) as f:
+            done = {row["file"]: row for row in csv.DictReader(f)}
+
+    by_brick = defaultdict(list)
+    for candidate in candidates:
+        if candidate["status"] != "candidate":
+            continue
+        name = f"bg_{candidate['parent_sga_id']}_{candidate['k']}.fits"
+        if name in done:
+            row = done[name]
+            candidate["status"] = ("accepted" if row["status"] == "written"
+                                   else "rejected")
+            candidate["reason"] = row["reason"]
+        else:
+            by_brick[candidate["brick"]].append(candidate)
+
+    tasks = [(str(root), str(out_dir), brickname, brick_candidates,
+              args.coverage_min)
+             for brickname, brick_candidates in sorted(by_brick.items())]
+    outcome = {}
+    written = 0
     new_manifest = not manifest_path.exists()
-    with open(manifest_path, "a", newline="") as f:
+    with open(manifest_path, "a", newline="", buffering=1) as f:
         manifest = csv.DictWriter(f, fieldnames=MANIFEST_FIELDS)
         if new_manifest:
             manifest.writeheader()
-        written = cut_candidates(root, candidates, catalog, out_dir,
-                                 manifest, args)
+        with ProcessPoolExecutor(max_workers=args.jobs) as pool:
+            futures = [pool.submit(cut_brick, task) for task in tasks]
+            for future in tqdm(as_completed(futures), total=len(futures),
+                               desc="cutting", unit="brick"):
+                for record in future.result():
+                    manifest.writerow(record)
+                    outcome[record["file"]] = record
+                    written += record["status"] == "written"
+    for brick_candidates in by_brick.values():
+        for candidate in brick_candidates:
+            record = outcome[
+                f"bg_{candidate['parent_sga_id']}_{candidate['k']}.fits"]
+            candidate["status"] = ("accepted" if record["status"] == "written"
+                                   else "rejected")
+            candidate["reason"] = record["reason"]
     print(f"{written} samples written to {out_dir}")
 
     with open(out_dir / "candidates.csv", "w", newline="") as f:
@@ -345,6 +384,9 @@ if __name__ == "__main__":
                         help="first N parents only")
     parser.add_argument("--workers", type=int, default=12,
                         help="parallel download connections")
+    parser.add_argument("--jobs", type=int, default=32,
+                        help="cut-stage worker processes (measured near-linear "
+                             "to 64; cold NFS reads are the real ceiling)")
     parser.add_argument("--overwrite", action="store_true",
-                        help="rewrite existing samples")
+                        help="ignore the manifest and re-cut this run's candidates")
     main(parser.parse_args())

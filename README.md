@@ -6,8 +6,7 @@ metadata — as training data for GRAF.
 
 Both classes of sample — galaxies and the backgrounds they are trained
 against — are cut from the same L1 brick coadds, fetched from the static
-NERSC file servers (never the viewer's cutout renderer, never the SGA
-mosaics). Frames are not rejected for containing bright objects; four
+NERSC file servers. Frames are not rejected for containing bright objects; four
 independent mask layers mark pixels instead, so no criterion separates
 the classes on anything but the galaxy. Values stay in nanomaggies with
 negative sky intact, and each frame's header carries the PSF FWHM read
@@ -19,10 +18,6 @@ from the survey's `psfsize` maps at that position.
 uv sync                                    # .venv with pinned dependencies
 uv run python scripts/fetch_catalogues.py  # reference catalogues (~0.8 GB, one-off)
 ```
-
-Everything large — brick mirror, samples, PSF stamps — lands under
-`data/sga` (every script takes `--root` to point elsewhere); nothing
-under `data/` is tracked.
 
 ## Usage
 
@@ -38,7 +33,7 @@ uv run python scripts/fetch_backgrounds.py --sample 200
 uv run python scripts/fetch_psf_library.py --n-groups 300
 ```
 
-Each sample is one FITS file, identical for both drivers:
+Each sample is one FITS file, identical for both datasets:
 
 ```python
 hdul = fits.open('.../sga_1179597.fits')
