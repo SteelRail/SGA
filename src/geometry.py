@@ -32,9 +32,18 @@ def elliptical_radius(d_east, d_north, pa_deg, ba):
 
 
 def offset_position(ra_deg, dec_deg, sep_arcsec, pa_deg):
-    """Position at separation `sep_arcsec` along position angle `pa_deg` (N->E)."""
-    d_east = sep_arcsec * np.sin(np.radians(pa_deg)) / 3600.0
-    d_north = sep_arcsec * np.cos(np.radians(pa_deg)) / 3600.0
-    dec = dec_deg + d_north
-    ra = (ra_deg + d_east / np.cos(np.radians(dec))) % 360.0
-    return ra, np.clip(dec, -90.0, 90.0)
+    """Position at separation `sep_arcsec` along position angle `pa_deg` (N->E).
+
+    Exact great-circle offset, so the realised separation equals the
+    requested one at any declination.
+    """
+    dec0 = np.radians(dec_deg)
+    sep = np.radians(sep_arcsec / 3600.0)
+    pa = np.radians(pa_deg)
+    sin_dec = np.clip(
+        np.sin(dec0) * np.cos(sep) + np.cos(dec0) * np.sin(sep) * np.cos(pa),
+        -1.0, 1.0)
+    dra = np.arctan2(np.sin(pa) * np.sin(sep) * np.cos(dec0),
+                     np.cos(sep) - np.sin(dec0) * sin_dec)
+    return ((np.asarray(ra_deg) + np.degrees(dra)) % 360.0,
+            np.degrees(np.arcsin(sin_dec)))

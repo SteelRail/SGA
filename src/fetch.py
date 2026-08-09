@@ -56,6 +56,9 @@ def valid_fits(path):
         with fits.open(path, memmap=True) as hdul:
             for hdu in hdul:
                 _ = hdu.header  # forces a seek through the whole HDU list
+            last = hdul[-1].data
+            if last is not None:
+                _ = last[-1]  # a truncated data block raises here
         return True
     except Exception:
         return False
@@ -76,9 +79,13 @@ def fetch_checksums(url, session=None):
     then falls back to the FITS content check.
     """
     session = session or get_session()
-    try:
-        response = session.get(url, timeout=TIMEOUT)
-    except requests.RequestException:
+    for _ in range(2):
+        try:
+            response = session.get(url, timeout=TIMEOUT)
+            break
+        except requests.RequestException:
+            continue
+    else:
         return {}
     if response.status_code != 200 or response.content[:1] == b"<":
         return {}
@@ -139,11 +146,15 @@ def _download(session, url, part):
             return 0
         response.raise_for_status()
         mode = "ab" if offset and response.status_code == 206 else "wb"
+        expected = response.headers.get("Content-Length")
         transferred = 0
         with open(part, mode) as f:
             for chunk in response.iter_content(CHUNK):
                 f.write(chunk)
                 transferred += len(chunk)
+        if expected is not None and transferred != int(expected):
+            raise requests.RequestException(
+                f"short read: {transferred} of {expected} bytes")
     return transferred
 
 

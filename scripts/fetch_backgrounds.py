@@ -45,6 +45,7 @@ Example:
 
 import argparse
 import csv
+import json
 import sys
 from collections import Counter, defaultdict
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -298,8 +299,21 @@ def main(args):
     out_dir = root / "samples" / "backgrounds"
     out_dir.mkdir(exist_ok=True, parents=True)
     manifest_path = out_dir / "manifest.csv"
+    # the manifest is only a valid ledger under the parameters that built it
+    spec = {key: getattr(args, key) for key in
+            ("zcut", "min_nexp", "size_mult", "min_size", "sga_margin",
+             "coverage_min", "sb_limit", "n_candidates", "radius_slack",
+             "seed")}
+    spec_path = out_dir / "run.json"
+    if args.overwrite:
+        manifest_path.unlink(missing_ok=True)
+        spec_path.unlink(missing_ok=True)
+    if spec_path.exists() and json.loads(spec_path.read_text()) != spec:
+        raise SystemExit(f"{spec_path} records different science parameters; "
+                         "wipe the samples directory or pass --overwrite")
+    spec_path.write_text(json.dumps(spec, indent=1))
     done = {}
-    if manifest_path.exists() and not args.overwrite:
+    if manifest_path.exists():
         with open(manifest_path) as f:
             done = {row["file"]: row for row in csv.DictReader(f)}
 
@@ -326,18 +340,30 @@ def main(args):
         manifest = csv.DictWriter(f, fieldnames=MANIFEST_FIELDS)
         if new_manifest:
             manifest.writeheader()
+        failed = 0
         with ProcessPoolExecutor(max_workers=args.jobs) as pool:
             futures = [pool.submit(cut_brick, task) for task in tasks]
             for future in tqdm(as_completed(futures), total=len(futures),
                                desc="cutting", unit="brick"):
-                for record in future.result():
+                try:
+                    records = future.result()
+                except Exception as error:
+                    failed += 1  # no manifest rows -> retried on the next run
+                    tqdm.write(f"brick failed: {error}")
+                    continue
+                for record in records:
                     manifest.writerow(record)
                     outcome[record["file"]] = record
                     written += record["status"] == "written"
+    if failed:
+        print(f"{failed} bricks failed; re-run to retry them")
     for brick_candidates in by_brick.values():
         for candidate in brick_candidates:
-            record = outcome[
-                f"bg_{candidate['parent_sga_id']}_{candidate['k']}.fits"]
+            record = outcome.get(
+                f"bg_{candidate['parent_sga_id']}_{candidate['k']}.fits")
+            if record is None:
+                candidate.update(status="rejected", reason="error")
+                continue
             candidate["status"] = ("accepted" if record["status"] == "written"
                                    else "rejected")
             candidate["reason"] = record["reason"]
@@ -388,5 +414,5 @@ if __name__ == "__main__":
                         help="cut-stage worker processes (measured peak on this "
                              "host; throughput degrades beyond ~96)")
     parser.add_argument("--overwrite", action="store_true",
-                        help="ignore the manifest and re-cut this run's candidates")
+                        help="reset the sample ledger and re-cut this run's candidates")
     main(parser.parse_args())
