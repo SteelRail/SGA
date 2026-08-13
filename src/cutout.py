@@ -157,7 +157,7 @@ def write_sample(path, sample, brickname, provenance, layers):
     layer_header = fits.Header()
     layer_header["EXTNAME"] = "LAYERS"
     layer_header["BIT0"] = ("INVALID", "no coverage in some band")
-    layer_header["BIT1"] = ("BRIGHT", "bright object per MASKBITS")
+    layer_header["BIT1"] = ("BRIGHT", "saturated/damaged per MASKBITS")
     layer_header["BIT2"] = ("SOURCE", "tractor detection footprint")
     layer_header["BIT3"] = ("GALAXY", "SGA ellipse at D26")
 

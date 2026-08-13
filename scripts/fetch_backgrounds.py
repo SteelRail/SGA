@@ -410,9 +410,9 @@ if __name__ == "__main__":
                         help="first N parents only")
     parser.add_argument("--workers", type=int, default=12,
                         help="parallel download connections")
-    parser.add_argument("--jobs", type=int, default=96,
-                        help="cut-stage worker processes (measured peak on this "
-                             "host; throughput degrades beyond ~96)")
+    parser.add_argument("--jobs", type=int, default=24,
+                        help="cut-stage worker processes; cold NFS reads bound "
+                             "the stage, and 24 saturates the mount")
     parser.add_argument("--overwrite", action="store_true",
                         help="reset the sample ledger and re-cut this run's candidates")
     main(parser.parse_args())

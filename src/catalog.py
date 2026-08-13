@@ -83,8 +83,12 @@ class Catalog:
         A position fails when it lies within `margin` times any galaxy's
         r26 along the ellipse direction, plus `extra_arcsec` (use the
         stamp half-diagonal so the whole stamp stays clear, not just its
-        centre). `exclude` drops one catalogue index per position — the
-        query galaxy itself, whose own extent must not fail its own test.
+        centre). The buffer is measured in each galaxy's elliptical
+        metric — a sky offset of `extra` is worth `extra/ba` along the
+        minor axis — so thin edge-on neighbours cannot slip a stamp
+        corner inside their ellipse. `exclude` drops one catalogue index
+        per position — the query galaxy itself, whose own extent must
+        not fail its own test.
         """
         ra_deg = np.atleast_1d(np.asarray(ra_deg, dtype=float))
         dec_deg = np.atleast_1d(np.asarray(dec_deg, dtype=float))
@@ -107,9 +111,17 @@ class Catalog:
                 * np.cos(np.radians(dec_deg[i])) * 3600.0
             r_ell = elliptical_radius(d_east, d_north,
                                       self._pa[indices], self._ba[indices])
-            ok[i] = bool(np.all(
-                r_ell > margin * self.r26[indices] + extra_arcsec[i]
-            ))
+            # a stamp is inside a galaxy's reach only if it is close in
+            # BOTH metrics: the elliptical bound alone over-rejects far
+            # thin galaxies, the circular bound alone under-rejects
+            # stamp corners near them
+            close = (
+                (r_ell <= margin * self.r26[indices]
+                 + extra_arcsec[i] / self._ba[indices])
+                & (np.hypot(d_east, d_north)
+                   <= margin * self.r26[indices] + extra_arcsec[i])
+            )
+            ok[i] = not close.any()
         return ok
 
     def overlapping(self, ra_deg, dec_deg, half_diag_arcsec, margin=1.0):

@@ -13,8 +13,13 @@ plane, so any criterion can be revised without recomputing the others:
     bit 0  INVALID  no coverage in at least one band (invvar == 0; also
                     covers chip gaps and the off-brick fill of
                     edge-clipped stamps)
-    bit 1  BRIGHT   MASKBITS bright-object bits: BRIGHT, MEDIUM,
-                    SATUR_G/R/Z, ALLMASK_G/R/Z
+    bit 1  BRIGHT   damaged pixels per MASKBITS: SATUR_G/R/Z and
+                    ALLMASK_G/R/Z. The DR9 BRIGHT/MEDIUM bits are
+                    deliberately excluded — they are magnitude-radius
+                    proximity circles around catalogued stars, not
+                    pixel damage, and swallow whole frames near bright
+                    stars; a consumer that wants them reads the raw
+                    MASK plane
     bit 2  SOURCE   tractor detection footprints from TYPE and
                     SHAPE_R/E1/E2 (the frame's own SGA galaxies excluded
                     — ref_cat L3 — so the galaxy layer alone owns them)
@@ -56,7 +61,7 @@ MASKBITS = {
 
 BRIGHT_BITS = sum(
     1 << MASKBITS[name]
-    for name in ("BRIGHT", "MEDIUM", "SATUR_G", "SATUR_R", "SATUR_Z",
+    for name in ("SATUR_G", "SATUR_R", "SATUR_Z",
                  "ALLMASK_G", "ALLMASK_R", "ALLMASK_Z")
 )
 GALAXY_BIT = 1 << MASKBITS["GALAXY"]
@@ -77,7 +82,7 @@ def invalid_layer(ivar):
 
 
 def bright_layer(mask_plane):
-    """Pixels flagged by the DR9 bright-object MASKBITS."""
+    """Pixels with actual damage per MASKBITS: saturation and ALLMASK."""
     return (mask_plane & BRIGHT_BITS) != 0
 
 
